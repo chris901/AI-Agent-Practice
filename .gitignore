@@ -1,0 +1,8 @@
+# 排除所有子目录中的 node_modules
+**/node_modules/
+.env
+*.log
+.DS_Store
+
+# Milvus / MinIO 数据目录（Docker 卷数据，勿提交）
+milvus/volumes/
