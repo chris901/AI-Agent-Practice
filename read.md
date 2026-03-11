@@ -1,0 +1,4 @@
+
+
+prompt-test
+PromptTemplate：提示词模版，可以填入占位符变量ChatPromptTemplate：对话形式（messages 数组）的提示词模版FewShotPromptTemplate：生成带示例的提示词模版FewShotChatTemplatePromptTemplate：生成带示例的提示词模版，对话形式LengthBasedExampleSelector：根据长度选择合适的示例SemanticSimilarityExampleSelector：选择语义相近的示例PipelinePromptTemplate：合并多个 Prompt Template 成一个大的 Prompt Template

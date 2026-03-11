@@ -122,7 +122,7 @@ ${parser.getFormatInstructions()}`;
 // 主函数
 async function main() {
 // 示例文本（包含多个人的信息）
-const sampleText = `我最近认识了几个新朋友。第一个是张总，女的，看起来30出头，在腾讯做技术总监，手机13800138000，微信是zhangzong2024。第二个是李工，男，大概28岁，在阿里云做架构师，电话15900159000，微信号lee_arch。还有一个是陈经理，女，35岁左右，在美团做产品经理，手机号是18800188000，微信chenpm2024。`;
+const sampleText = `我最近认识了几个新朋友。第一个是欧，女的，看起来24出头，在家里蹲，手机135661399，微信是zhangzong2024。钟先生，25岁，程序员，目前待业，手机号123456768`;
 
 console.log('📝 输入文本:');
 console.log(sampleText);
