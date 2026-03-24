@@ -76,6 +76,21 @@ services:
         aliases:
           - mysql                            # 网络别名，方便其他服务通过 mysql 访问
 
+  mysql2:
+    container_name: hello-mysql-2
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: admin             # 必须设置 root 密码
+    ports:
+      - "3307:3306"                          # 使用 3307 避免与第一个 MySQL 端口冲突
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mysql2:/var/lib/mysql
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - mysql2
+
 networks:
   default:
     name: milvus
