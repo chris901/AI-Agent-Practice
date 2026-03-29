@@ -6,9 +6,10 @@ import { z } from 'zod';
 import { UserService } from './user.service';
 import { UsersModule } from '../users/users.module';
 import { ToolModule } from '../tool/tool.module';
+import { ChatModule } from '../chat/chat.module';
 
 @Module({
-  imports: [UsersModule, ToolModule],
+  imports: [UsersModule, ToolModule, ChatModule],
   controllers: [AiController],
   providers: [
     AiService,

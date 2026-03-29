@@ -9,54 +9,12 @@ import {
   ToolMessage,
 } from '@langchain/core/messages';
 import { Runnable } from '@langchain/core/runnables';
-
-// const database = {
-//   users: {
-//     '001': {
-//       id: '001',
-//       name: '张三',
-//       email: 'zhangsan@example.com',
-//       role: 'admin',
-//     },
-//     '002': { id: '002', name: '李四', email: 'lisi@example.com', role: 'user' },
-//     '003': {
-//       id: '003',
-//       name: '王五',
-//       email: 'wangwu@example.com',
-//       role: 'user',
-//     },
-//   },
-// };
-
-// const queryUserArgsSchema = z.object({
-//   userId: z.string().describe('用户 ID，例如: 001, 002, 003'),
-// });
-
-// type QueryUserArgs = {
-//   userId: string;
-// };
-
-// const queryUserTool = tool(
-//   async ({ userId }: QueryUserArgs) => {
-//     const user = database.users[userId];
-
-//     if (!user) {
-//       return `用户 ID ${userId} 不存在。可用的 ID: 001, 002, 003`;
-//     }
-
-//     return `用户信息：\n- ID: ${user.id}\n- 姓名: ${user.name}\n- 邮箱: ${user.email}\n- 角色: ${user.role}`;
-//   },
-//   {
-//     name: 'query_user',
-//     description:
-//       '查询数据库中的用户信息。输入用户 ID，返回该用户的详细信息（姓名、邮箱、角色）。',
-//     schema: queryUserArgsSchema,
-//   },
-// );
+import { ChatHistoryService } from '../chat/chat-history.service';
+import { RagService } from '../chat/rag.service';
 
 @Injectable()
 export class AiService {
-  private readonly modelWithTools: Runnable<BaseMessage[], AIMessage>; // 第一个输入，第二个输出
+  private readonly modelWithTools: Runnable<BaseMessage[], AIMessage>;
 
   constructor(
     @Inject('CHAT_MODEL') model: ChatOpenAI,
@@ -65,6 +23,8 @@ export class AiService {
     @Inject('WEB_SEARCH_TOOL') private readonly webSearchTool: any,
     @Inject('DB_USERS_CRUD_TOOL') private readonly dbUsersCrudTool: any,
     @Inject('CRON_JOB_TOOL') private readonly cronJobTool: any,
+    private readonly chatHistory: ChatHistoryService,
+    private readonly ragService: RagService,
   ) {
     this.modelWithTools = model.bindTools([
       this.queryUserTool,
@@ -75,10 +35,21 @@ export class AiService {
     ]);
   }
 
-  async runChain(query: string): Promise<string> {
+  private async ragBlockFor(sessionId: string, query: string): Promise<string> {
+    const ctx = await this.ragService.retrieveContext(sessionId, query);
+    if (!ctx) return '';
+    return `\n\n以下是与当前问题相关的历史片段，请仅作为参考，不要编造不存在的信息：\n${ctx}`;
+  }
+
+  async runChain(
+    query: string,
+    sessionId?: string,
+  ): Promise<{ answer: string; sessionId: string }> {
+    const sid = sessionId ?? (await this.chatHistory.createSession()).id;
+    const ragBlock = await this.ragBlockFor(sid, query);
     const messages: BaseMessage[] = [
       new SystemMessage(
-        '你是一个智能助手，可以在需要时调用工具（如 query_user）来查询用户信息，（send_mail）发送邮件，再用结果回答用户的问题。',
+        `你是一个智能助手，可以在需要时调用工具（如 query_user）来查询用户信息，（send_mail）发送邮件，再用结果回答用户的问题。${ragBlock}`,
       ),
       new HumanMessage(query),
     ];
@@ -87,12 +58,13 @@ export class AiService {
       const aiMessage = await this.modelWithTools.invoke(messages);
       messages.push(aiMessage);
 
-      console.log(aiMessage);
-      const toolCalls = aiMessage.tool_calls ?? []; // 没有要调用的工具，直接把回答返回给调用方
+      const toolCalls = aiMessage.tool_calls ?? [];
 
       if (!toolCalls.length) {
-        return aiMessage.content as string;
-      } // 依次执行本轮需要调用的所有工具
+        const answer = String(aiMessage.content ?? '');
+        await this.chatHistory.appendExchange(sid, query, answer);
+        return { answer, sessionId: sid };
+      }
 
       for (const toolCall of toolCalls) {
         const toolCallId = toolCall.id || '';
@@ -153,7 +125,11 @@ export class AiService {
     }
   }
 
-  async *runChainStream(query: string): AsyncIterable<string> {
+  async *runChainStream(
+    query: string,
+    sessionId: string,
+  ): AsyncIterable<string> {
+    const ragBlock = await this.ragBlockFor(sessionId, query);
     const messages: BaseMessage[] = [
       new SystemMessage(`你是一个通用任务助手，可以根据用户的目标规划步骤，并在需要时调用工具：\`query_user\` 查询或校验用户信息、\`send_mail\` 发送邮件、\`web_search\` 进行互联网搜索、\`db_users_crud\` 读写数据库 users 表、\`cron_job\` 创建和管理定时/周期任务（\`list\`/\`add\`/\`toggle\`），从而实现提醒、定期任务、数据同步等各种自动化需求。
         
@@ -166,26 +142,27 @@ export class AiService {
         
         当用户请求“在未来某个时间点执行某个动作”（例如“1分钟后给我发一个笑话到邮箱”）时，本轮对话只需要使用 \`cron_job\` 设置/更新定时任务，不要在当前轮直接完成这个动作本身：不要直接调用 \`send_mail\` 给他发邮件，也不要在当前轮就真正“执行”指令，只需把要执行的动作写进 \`instruction\` 里，交给将来的定时任务去跑。
         
-        注意：像“\`1分钟后提醒我喝水\`”，时间相关信息用于计算下一次执行时间，而 \`instruction\` 应该是“提醒我喝水”；本轮不需要立刻提醒。`),
+        注意：像“\`1分钟后提醒我喝水\`”，时间相关信息用于计算下一次执行时间，而 \`instruction\` 应该是“提醒我喝水”；本轮不需要立刻提醒。${ragBlock}`),
       new HumanMessage(query),
     ];
+    let accumulated = '';
 
     while (true) {
-      // 一轮对话：先让模型思考并（可能）提出工具调用
       const stream = await this.modelWithTools.stream(messages);
 
       let fullAIMessage: AIMessageChunk | null = null;
 
       for await (const chunk of stream as AsyncIterable<AIMessageChunk>) {
-        // 使用 concat 持续拼接，得到本轮完整的 AIMessageChunk
         fullAIMessage = fullAIMessage ? fullAIMessage.concat(chunk) : chunk;
 
         const hasToolCallChunk =
           !!fullAIMessage.tool_call_chunks &&
-          fullAIMessage.tool_call_chunks.length > 0; // 只要当前轮次还没出现 tool 调用的 chunk，就可以把文本内容流式往外推
+          fullAIMessage.tool_call_chunks.length > 0;
 
         if (!hasToolCallChunk && chunk.content) {
-          yield chunk.content as string;
+          const txt = String(chunk.content);
+          accumulated += txt;
+          yield txt;
         }
       }
 
@@ -195,14 +172,14 @@ export class AiService {
 
       messages.push(fullAIMessage);
 
-      const toolCalls = fullAIMessage.tool_calls ?? []; // 没有工具调用：说明这一轮就是最终回答，已经在上面的 for-await 中流完了，可以结束
+      const toolCalls = fullAIMessage.tool_calls ?? [];
 
       if (!toolCalls.length) {
+        await this.chatHistory.appendExchange(sessionId, query, accumulated);
         return;
-      } // 有工具调用：本轮我们不再额外输出内容，而是执行工具，生成 ToolMessage，进入下一轮
+      }
 
       for (const toolCall of toolCalls) {
-        console.log('toolCalls', toolCalls);
         const toolCallId = toolCall.id || '';
         const toolName = toolCall.name;
 

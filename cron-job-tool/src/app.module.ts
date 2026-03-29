@@ -12,6 +12,10 @@ import { User } from './users/entities/user.entity';
 import { Job } from './job/entities/job.entity';
 import { ScheduleModule } from '@nestjs/schedule';
 import { JobModule } from './job/job.module';
+import { ChatSession } from './chat/entities/chat-session.entity';
+import { ChatMessage } from './chat/entities/chat-message.entity';
+import { RagChunk } from './chat/entities/rag-chunk.entity';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -29,8 +33,9 @@ import { JobModule } from './job/job.module';
       synchronize: true, // 服务启动的时候自动建表
       connectorPackage: 'mysql2',
       logging: true, // 会打印 sql 语句
-      entities: [User, Job],
+      entities: [User, Job, ChatSession, ChatMessage, RagChunk],
     }),
+    ChatModule,
     AiModule,
     UsersModule,
     ConfigModule.forRoot({
