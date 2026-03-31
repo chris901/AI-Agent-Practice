@@ -76,6 +76,29 @@
         border-color: #bfdbfe;
         background: #eff6ff;
       }
+      .session-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .session-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .icon-btn {
+        border: 1px solid #e5e7eb;
+        background: #fff;
+        border-radius: 8px;
+        padding: 4px 8px;
+        cursor: pointer;
+        font-size: 12px;
+        color: #6b7280;
+      }
+      .icon-btn:hover {
+        border-color: #d1d5db;
+        color: #111827;
+      }
       .session-title {
         font-size: 14px;
         font-weight: 500;
@@ -227,15 +250,48 @@
           const item = document.createElement('div');
           item.className =
             'session-item' + (s.id === currentSessionId ? ' active' : '');
+          const title = s.title || s.id.slice(0, 8);
           item.innerHTML = `
-            <div class="session-title">${s.title || s.id.slice(0, 8)}</div>
-            <div class="session-time">${fmtTime(s.updatedAt || s.createdAt)}</div>
+            <div class="session-row">
+              <div style="min-width:0; flex:1;">
+                <div class="session-title">${title}</div>
+                <div class="session-time">${fmtTime(s.updatedAt || s.createdAt)}</div>
+              </div>
+              <div class="session-actions">
+                <button class="icon-btn" data-action="delete" data-id="${s.id}">删除</button>
+              </div>
+            </div>
           `;
           item.onclick = async () => {
             if (s.id === currentSessionId) return;
             currentSessionId = s.id;
             renderSessions();
             await loadMessages(currentSessionId);
+          };
+          const delBtn = item.querySelector('button[data-action="delete"]');
+          delBtn.onclick = async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const ok = confirm('确定删除该会话？（将同步删除向量索引）');
+            if (!ok) return;
+            try {
+              closeStream();
+              statusEl.textContent = '状态：删除中...';
+              const res = await fetch(`/ai/sessions/${encodeURIComponent(s.id)}`, {
+                method: 'DELETE',
+              });
+              if (!res.ok) throw new Error('删除失败');
+              if (currentSessionId === s.id) {
+                currentSessionId = '';
+                chatTitleEl.textContent = '未选择会话';
+                messagesEl.innerHTML =
+                  '<div class="empty">会话已删除，请新建对话或选择其它会话。</div>';
+              }
+              await loadSessions();
+              statusEl.textContent = '状态：已删除';
+            } catch (err) {
+              statusEl.textContent = `状态：删除失败 - ${err.message}`;
+            }
           };
           sessionsEl.appendChild(item);
         });

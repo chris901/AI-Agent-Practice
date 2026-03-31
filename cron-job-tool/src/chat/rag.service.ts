@@ -3,20 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { OpenAIEmbeddings } from '@langchain/openai';
 import { EntityManager } from 'typeorm';
 import { RagChunk } from './entities/rag-chunk.entity';
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || !a.length) return 0;
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  const d = Math.sqrt(na) * Math.sqrt(nb);
-  return d === 0 ? 0 : dot / d;
-}
+import { MilvusService } from '../vector/milvus.service';
 
 function chunkText(text: string, maxLen = 500): string[] {
   const t = text.trim();
@@ -32,24 +19,29 @@ function chunkText(text: string, maxLen = 500): string[] {
 export class RagService {
   private readonly logger = new Logger(RagService.name);
   private readonly embeddings: OpenAIEmbeddings | null;
+  private readonly vectorDim: number;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly entityManager: EntityManager,
+    private readonly milvus: MilvusService,
   ) {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY');
     if (!apiKey) {
       this.embeddings = null;
+      this.vectorDim = Number(this.configService.get('VECTOR_DIM') ?? 1024);
       return;
     }
+    this.vectorDim = Number(this.configService.get('VECTOR_DIM') ?? 1024);
     this.embeddings = new OpenAIEmbeddings({
       model:
         this.configService.get<string>('EMBEDDINGS_MODEL_NAME') ??
-        'text-embedding-3-small',
+        'text-embedding-v3',
       apiKey,
       configuration: {
         baseURL: this.configService.get<string>('OPENAI_BASE_URL'),
       },
+      dimensions: this.vectorDim,
     });
   }
 
@@ -60,17 +52,37 @@ export class RagService {
   ): Promise<void> {
     if (!this.embeddings) return;
     const rows: Partial<RagChunk>[] = [];
+    const milvusRows: {
+      id: string;
+      session_id: string;
+      role: 'user' | 'assistant';
+      index: number;
+      content: string;
+      vector: number[];
+    }[] = [];
 
     const addChunks = async (role: 'user' | 'assistant', raw: string) => {
       const parts = chunkText(raw);
-      for (const content of parts) {
+      for (let i = 0; i < parts.length; i++) {
+        const content = parts[i];
         try {
           const vec = await this.embeddings!.embedQuery(content);
+          // MySQL 侧：保留元数据（embeddingJson 可选：便于回退/对照）
           rows.push({
             sessionId,
             role,
             content,
             embeddingJson: JSON.stringify(vec),
+          });
+
+          // Milvus 侧：向量索引主路径
+          milvusRows.push({
+            id: `${sessionId}_${Date.now()}_${role}_${i}_${Math.random().toString(16).slice(2)}`,
+            session_id: sessionId,
+            role,
+            index: i,
+            content,
+            vector: vec,
           });
         } catch (e) {
           this.logger.warn(`embed chunk failed: ${(e as Error).message}`);
@@ -82,10 +94,23 @@ export class RagService {
     await addChunks('assistant', assistantText);
 
     if (!rows.length) return;
-    await this.entityManager.save(
-      RagChunk,
-      rows.map((r) => this.entityManager.create(RagChunk, r)),
-    );
+
+    // 先写 Milvus（在线检索依赖它），失败不影响主链路
+    try {
+      await this.milvus.insertRagChunks(milvusRows);
+    } catch (e) {
+      this.logger.warn(`milvus insert failed: ${(e as Error).message}`);
+    }
+
+    // MySQL 元数据写入（可用于审计/回退）
+    try {
+      await this.entityManager.save(
+        RagChunk,
+        rows.map((r) => this.entityManager.create(RagChunk, r)),
+      );
+    } catch (e) {
+      this.logger.warn(`mysql rag save failed: ${(e as Error).message}`);
+    }
   }
 
   async retrieveContext(
@@ -104,29 +129,52 @@ export class RagService {
       return '';
     }
 
-    const chunks = await this.entityManager.find(RagChunk, {
-      where: { sessionId },
-      order: { createdAt: 'DESC' },
-      take: 300,
-    });
+    // 主路径：Milvus 向量检索（仅当前 sessionId）
+    try {
+      const hits = await this.milvus.searchBySessionId(
+        sessionId,
+        queryVec,
+        topK,
+      );
+      const picked = hits
+        .map((h) => ({
+          role:
+            h.role === 'user' || h.role === 'assistant' ? h.role : 'unknown',
+          content: h.content ?? '',
+        }))
+        .filter((x) => x.content);
+      if (picked.length) {
+        return picked
+          .map((p, i) => `[片段${i + 1} ${p.role}] ${p.content}`)
+          .join('\n\n');
+      }
+    } catch (e) {
+      this.logger.warn(`milvus search failed: ${(e as Error).message}`);
+    }
 
-    if (!chunks.length) return '';
-    const scored = chunks
-      .map((c) => {
-        try {
-          const emb = JSON.parse(c.embeddingJson) as number[];
-          return { c, score: cosineSimilarity(queryVec, emb) };
-        } catch {
-          return { c, score: -1 };
-        }
-      })
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
+    // 降级：若 Milvus 不可用，回退到 MySQL 最近片段（不做向量相似度）
+    try {
+      const chunks = await this.entityManager.find(RagChunk, {
+        where: { sessionId },
+        order: { createdAt: 'DESC' },
+        take: topK,
+      });
+      if (!chunks.length) return '';
+      return chunks
+        .map((c, i) => `[片段${i + 1} ${c.role}] ${c.content}`)
+        .join('\n\n');
+    } catch (e) {
+      this.logger.warn(`mysql rag fallback failed: ${(e as Error).message}`);
+      return '';
+    }
+  }
 
-    if (!scored.length) return '';
-    return scored
-      .map((s, i) => `[片段${i + 1} ${s.c.role}] ${s.c.content}`)
-      .join('\n\n');
+  async deleteSessionVectors(sessionId: string): Promise<void> {
+    try {
+      await this.milvus.deleteBySessionId(sessionId);
+    } catch (e) {
+      this.logger.warn(`milvus delete failed: ${(e as Error).message}`);
+      throw e;
+    }
   }
 }

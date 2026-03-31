@@ -31,6 +31,7 @@
     "@nestjs/schedule": "^6.1.1",
     "@nestjs/serve-static": "^5.0.4",
     "@nestjs/typeorm": "^11.0.0",
+    "@zilliz/milvus2-sdk-node": "^2.6.12",
     "class-validator": "^0.15.1",
     "cron": "^4.4.0",
     "mysql2": "^3.20.0",

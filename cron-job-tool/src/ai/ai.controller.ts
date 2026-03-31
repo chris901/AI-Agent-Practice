@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   MessageEvent,
   Param,
@@ -37,6 +38,12 @@ export class AiController {
     return this.chatHistory.listMessages(id);
   }
 
+  @Delete('sessions/:id')
+  async deleteSession(@Param('id') id: string) {
+    await this.chatHistory.deleteSession(id);
+    return { ok: true };
+  }
+
   @Get('chat')
   async chat(
     @Query('query') query: string,
@@ -46,12 +53,19 @@ export class AiController {
   }
 
   @Sse('chat/stream')
-  async chatStream(
+  chatStream(
     @Query('query') query: string,
     @Query('sessionId') sessionId: string | undefined,
     @Res({ passthrough: true }) res: Response,
-  ): Promise<Observable<MessageEvent>> {
-    const sid = sessionId ?? (await this.chatHistory.createSession()).id;
+  ): Observable<MessageEvent> {
+    // SSE handler must be sync; require sessionId from client
+    const sid = sessionId;
+    if (!sid) {
+      res.setHeader('X-Session-Id', '');
+      return from(['缺少 sessionId，请先创建会话后再发起流式对话。']).pipe(
+        map((chunk) => ({ data: chunk })),
+      );
+    }
     res.setHeader('X-Session-Id', sid);
     const stream = this.aiService.runChainStream(query, sid);
 

@@ -23,6 +23,7 @@ export class AiService {
     @Inject('WEB_SEARCH_TOOL') private readonly webSearchTool: any,
     @Inject('DB_USERS_CRUD_TOOL') private readonly dbUsersCrudTool: any,
     @Inject('CRON_JOB_TOOL') private readonly cronJobTool: any,
+    @Inject('TIME_NOW_TOOL') private readonly timeNowTool: any,
     private readonly chatHistory: ChatHistoryService,
     private readonly ragService: RagService,
   ) {
@@ -32,7 +33,56 @@ export class AiService {
       this.webSearchTool,
       this.dbUsersCrudTool,
       this.cronJobTool,
+      this.timeNowTool,
     ]);
+  }
+
+  private isTimeQuestion(query: string): boolean {
+    const q = query.trim();
+    // 只覆盖“当前时间/今天日期/现在几点/现在几点几分”常见表达
+    return (
+      q.includes('时间') ||
+      q.includes('几点') ||
+      q.includes('日期') ||
+      q.includes('今天') ||
+      /\b(current time|current date|time now|date)\b/i.test(q)
+    );
+  }
+
+  private formatTimeNowFromToolResult(result: unknown): string {
+    const r = result as
+      | { iso?: string; timestamp?: number; localText?: string }
+      | null
+      | undefined;
+
+    // 优先使用 time_now 工具返回的本地时区文本，避免 UTC 与本地时区偏差
+    if (r?.localText && typeof r.localText === 'string') {
+      return `当前时间是 ${r.localText}`;
+    }
+
+    const iso = r?.iso;
+    const ts = r?.timestamp;
+    const d =
+      iso != null
+        ? new Date(iso)
+        : typeof ts === 'number'
+          ? new Date(ts)
+          : null;
+
+    if (!d || Number.isNaN(d.getTime())) {
+      return '当前时间：无法解析 time_now 返回值';
+    }
+
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const mm = d.getMonth() + 1;
+    const dd = d.getDate();
+    const hh = d.getHours();
+    const mi = d.getMinutes();
+    const ss = d.getSeconds();
+    return `当前时间是 ${yyyy}年${mm}月${dd}日 ${pad2(hh)}:${pad2(mi)}:${pad2(
+      ss,
+    )}`;
   }
 
   private async ragBlockFor(sessionId: string, query: string): Promise<string> {
@@ -46,6 +96,15 @@ export class AiService {
     sessionId?: string,
   ): Promise<{ answer: string; sessionId: string }> {
     const sid = sessionId ?? (await this.chatHistory.createSession()).id;
+
+    // 时间类问题使用 time_now 做确定性输出，避免模型“猜测日期”
+    if (this.isTimeQuestion(query)) {
+      const toolResult = await this.timeNowTool.invoke({});
+      const answer = this.formatTimeNowFromToolResult(toolResult);
+      await this.chatHistory.appendExchange(sid, query, answer);
+      return { answer, sessionId: sid };
+    }
+
     const ragBlock = await this.ragBlockFor(sid, query);
     const messages: BaseMessage[] = [
       new SystemMessage(
@@ -120,6 +179,18 @@ export class AiService {
               content: result,
             }),
           );
+        } else if (toolName === 'time_now') {
+          const result = await this.timeNowTool.invoke(toolCall.args);
+          const content =
+            typeof result === 'string' ? result : JSON.stringify(result);
+
+          messages.push(
+            new ToolMessage({
+              tool_call_id: toolCallId,
+              name: toolName,
+              content,
+            }),
+          );
         }
       }
     }
@@ -129,9 +200,18 @@ export class AiService {
     query: string,
     sessionId: string,
   ): AsyncIterable<string> {
+    // 时间类问题使用 time_now 做确定性输出，避免模型“猜测日期”或 time_now 对象导致的消息解析问题
+    if (this.isTimeQuestion(query)) {
+      const toolResult = await this.timeNowTool.invoke({});
+      const answer = this.formatTimeNowFromToolResult(toolResult);
+      await this.chatHistory.appendExchange(sessionId, query, answer);
+      yield answer;
+      return;
+    }
+
     const ragBlock = await this.ragBlockFor(sessionId, query);
     const messages: BaseMessage[] = [
-      new SystemMessage(`你是一个通用任务助手，可以根据用户的目标规划步骤，并在需要时调用工具：\`query_user\` 查询或校验用户信息、\`send_mail\` 发送邮件、\`web_search\` 进行互联网搜索、\`db_users_crud\` 读写数据库 users 表、\`cron_job\` 创建和管理定时/周期任务（\`list\`/\`add\`/\`toggle\`），从而实现提醒、定期任务、数据同步等各种自动化需求。
+      new SystemMessage(`你是一个通用任务助手，可以根据用户的目标规划步骤，并在需要时调用工具：\`time_now\`获取当前服务器时间，\`query_user\` 查询或校验用户信息、\`send_mail\` 发送邮件、\`web_search\` 进行互联网搜索、\`db_users_crud\` 读写数据库 users 表、\`cron_job\` 创建和管理定时/周期任务（\`list\`/\`add\`/\`toggle\`），从而实现提醒、定期任务、数据同步等各种自动化需求。
         
         定时任务类型选择规则（非常重要）：
         - 用户说“X分钟/小时/天后”“在某个时间点”“到点提醒”（一次性）=> 用 \`cron_job\` + \`type=at\`（执行一次后自动停用），\`at\`=当前时间+X 或解析出的时间点
@@ -231,6 +311,18 @@ export class AiService {
               tool_call_id: toolCallId,
               name: toolName,
               content: result,
+            }),
+          );
+        } else if (toolName === 'time_now') {
+          const result = await this.timeNowTool.invoke(toolCall.args);
+          const content =
+            typeof result === 'string' ? result : JSON.stringify(result);
+
+          messages.push(
+            new ToolMessage({
+              tool_call_id: toolCallId,
+              name: toolName,
+              content,
             }),
           );
         }

@@ -48,7 +48,7 @@ export class ChatHistoryService {
     userContent: string,
     assistantContent: string,
   ): Promise<void> {
-    await this.getSessionOrThrow(sessionId);
+    const session = await this.getSessionOrThrow(sessionId);
     await this.entityManager.save(ChatMessage, [
       this.entityManager.create(ChatMessage, {
         sessionId,
@@ -61,11 +61,46 @@ export class ChatHistoryService {
         content: assistantContent,
       }),
     ]);
-    await this.entityManager.update(
-      ChatSession,
-      { id: sessionId },
-      { updatedAt: new Date() },
-    );
+
+    // 如果会话还没有标题，基于首条用户内容生成一个简短语义标题
+    if (!session.title) {
+      const raw = userContent.trim();
+      let title = raw;
+      // 取第一句或前 30 个字符，去掉多余空白
+      const firstPunct = raw.search(/[。！？?!]/);
+      if (firstPunct > 0) {
+        title = raw.slice(0, firstPunct);
+      }
+      if (title.length > 30) {
+        title = `${title.slice(0, 30)}...`;
+      }
+      if (!title) {
+        title = '新的对话';
+      }
+
+      await this.entityManager.update(
+        ChatSession,
+        { id: sessionId },
+        { title, updatedAt: new Date() },
+      );
+    } else {
+      await this.entityManager.update(
+        ChatSession,
+        { id: sessionId },
+        { updatedAt: new Date() },
+      );
+    }
+
     await this.ragService.indexSessionTurn(sessionId, userContent, assistantContent);
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.getSessionOrThrow(sessionId);
+
+    // 先删除 MySQL 会话（ChatMessage 通过 onDelete=CASCADE 会被清理）
+    await this.entityManager.delete(ChatSession, { id: sessionId });
+
+    // 再删除 Milvus 向量（同步删除语义）
+    await this.ragService.deleteSessionVectors(sessionId);
   }
 }
