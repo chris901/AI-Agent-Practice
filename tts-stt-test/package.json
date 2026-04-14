@@ -11,6 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "dotenv": "^17.3.1",
-    "tencentcloud-sdk-nodejs-tts": "^4.1.182"
+    "tencentcloud-sdk-nodejs": "^4.1.211",
+    "tencentcloud-sdk-nodejs-tts": "^4.1.182",
+    "ws": "^8.20.0"
   }
 }

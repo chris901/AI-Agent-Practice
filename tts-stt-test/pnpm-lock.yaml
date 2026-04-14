@@ -11,9 +11,15 @@ importers:
       dotenv:
         specifier: ^17.3.1
         version: 17.3.1
+      tencentcloud-sdk-nodejs:
+        specifier: ^4.1.211
+        version: 4.1.211
       tencentcloud-sdk-nodejs-tts:
         specifier: ^4.1.182
         version: 4.1.182
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
 
 packages:
 
@@ -154,6 +160,10 @@ packages:
     resolution: {integrity: sha512-JAwsmqt3+N7Pkpa1tpW2zwKzzyuCE5unVI3x5qX8rEkoy1OM4SXbdM5X6Vcztww4fl3tLWBRey4xetMse4ucDQ==}
     engines: {node: '>=10'}
 
+  tencentcloud-sdk-nodejs@4.1.211:
+    resolution: {integrity: sha512-XxFing1LP/ccG9CT3hBVpZCa+u8dwpIaK1RgOYinfSruCjMpSAqYwEcoinX8YhofRL0mQ5DLeuUb5kdiEzAxGw==}
+    engines: {node: '>=10'}
+
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
@@ -169,6 +179,18 @@ packages:
 
   whatwg-url@5.0.0:
     resolution: {integrity: sha512-saE57nupxk6v3HY35+jzBwYa0rKSy0XR8JSxZPwgLr7ys0IBzhGviA1/TUGJLmSVqs8pb9AnvICXEuOHLprYTw==}
+
+  ws@8.20.0:
+    resolution: {integrity: sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
 
 snapshots:
 
@@ -314,6 +336,21 @@ snapshots:
       - encoding
       - supports-color
 
+  tencentcloud-sdk-nodejs@4.1.211:
+    dependencies:
+      form-data: 3.0.4
+      get-stream: 6.0.1
+      https-proxy-agent: 5.0.1
+      ini: 5.0.0
+      is-stream: 2.0.1
+      json-bigint: 1.0.0
+      node-fetch: 2.7.0
+      tslib: 1.13.0
+      uuid: 9.0.1
+    transitivePeerDependencies:
+      - encoding
+      - supports-color
+
   tr46@0.0.3: {}
 
   tslib@1.13.0: {}
@@ -326,3 +363,5 @@ snapshots:
     dependencies:
       tr46: 0.0.3
       webidl-conversions: 3.0.1
+
+  ws@8.20.0: {}
